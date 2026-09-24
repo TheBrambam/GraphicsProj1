@@ -1,0 +1,623 @@
+<!DOCTYPE html>
+<html lang ="en">
+
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Canyon Runner</title>
+
+  <style>
+    body {
+      margin: 0;
+      background: #111;
+      color: #fff;
+      font-family: courier new;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      min-height: 100vh;
+      overflow: hidden;
+    }
+
+    canvas {
+      border: 4px solid #333;
+      background: #000;
+      box-shadow: 0 0 20px rgba(0, 255, 136, 0.3);
+      cursor: pointer;
+    }
+
+    h1 {
+      margin-bottom: 5px;
+      font-size: 24px;
+      color: #00ff88;
+    }
+
+    p {
+      margin-top: 5px;
+      color: #888;
+      font-size: 14px;
+    }
+
+    button {
+      margin-top: 8px;
+      padding: 8px 14px;
+      border: 1px solid "#00ff88";
+      background: #111;
+      color: "#00ff88";
+      font-family: inherit;
+      cursor: pointer;
+    }
+
+    button:hover {
+      background: #00ff88;
+      color: #111;
+    }
+  </style>
+</head>
+
+<body>
+
+  <h1>Canyon Runner</h1>
+  <canvas id = "gameCanvas" width = "800" height = "400"></canvas>
+  <button id = "modeButton">Switch to WIREFRAME MODE (with T key) </button>
+  <p>Use left and right arrow keys to move and dodge redered cubes. Press T to do the Halo Anniversary thing!</p>
+
+<script>
+  const canvas = document.getElementById("gameCanvas");
+  const ctx = canvas.getContext("2d");
+  const modeButton = document.getElementById("modeButton");
+
+  const W = canvas.width;
+  const H = canvas.height;
+  const PIXEL_SIZE = 5;
+  const BUFFER_W = Math.ceil(W/ PIXEL_SIZE);
+  const BUFFER_H = Math.ceil(H / PIXEL_SIZE);
+
+  let gameState = "playing";
+  let score = 0;
+  let speed = 0.008; // best chance of making it
+  let distance = 0;
+  let renderMode = "triangles";
+
+  const centerX = W / 2;
+  const horizonY = 100;
+
+  let playerLane = 0;
+  let playerTargetX = centerX;
+  let playerX = centerX;
+
+  let obstacles = [
+    { lane: -1, z: 0.25 },
+    { lane: 1, z: 0.55 },
+    { lane: 0, z: 0.85 }
+  ];
+
+  const colorBuffer = new Array (BUFFER_W * BUFFER_H);
+  const depthBuffer = new Float32Array(BUFFER_W * BUFFER_H);
+
+  function perspectiveY(z) {
+    return horizonY + (1 - z) * (1 - z) * (H - horizonY);
+  }
+
+  function roadHalfWidth(z) {
+    const nearWidth = 340;
+    const farWidth = 10;
+
+    return farWidth + (nearWidth - farWidth) * (1 - z);
+  }
+
+  function laneX(lane, z) {
+    const width = roadHalfWidth(z);
+    return centerX + lane * width * 0.5;
+  }
+
+  function clearBuffers() {
+    colorBuffer.fill("#000000");
+    depthBuffer.fill(Infinity);
+  }
+
+  function edgeFunction(ax, ay, bx, by, px, py) {
+    return (px - ax) * (by - ay) - (py - ay) * (bx - ax);
+  }
+
+  function drawTriangleToBuffer(v0, v1, v2, color) {
+    const minX = Math.max(0, Math.floor(Math.min(v0.x, v1.x, v2.x) / PIXEL_SIZE));
+    const maxX = Math.min(BUFFER_W -1, Math.floor(Math.max(v0.x, v1.x, v2.x) / PIXEL_SIZE));
+    const minY = Math.max(0, Math.floor(Math.min(v0.y, v1.y, v2.y) / PIXEL_SIZE));
+    const maxY = Math.min(BUFFER_H - 2, Math.floor(Math.max(v0.y, v1.y, v2.y) / PIXEL_SIZE));
+
+    const area = edgeFunction(v0.x, v0.y, v1.x, v1.y, v2.x, v2.y);
+    if (Math.abs(area) < 0.00001) return;
+
+    for (let by = minY; by <= maxY; by++) {
+      for (let bx = minX; bx <= maxX; bx++) {
+        const px = bx * PIXEL_SIZE + PIXEL_SIZE * 0.5;
+        const py = by * PIXEL_SIZE + PIXEL_SIZE * 0.5;
+
+        const w0 = edgeFunction(v1.x, v1.y, v2.x, v2.y, px, py);
+        const w1 = edgeFunction(v2.x, v2.y, v0.x, v0.y, px, py);
+        const w2 = edgeFunction(v0.x, v0.y, v1.x, v1.y, px, py);
+
+        const inside = area > 0
+          ? (w0 >= 0 && w1 >= 0 && w2 >= 0)
+          : (w0 <= 0 && w1 <= 0 && w2 <= 0);
+
+        if (!inside) continue;
+
+        const a = w0 / area;
+        const b = w1 / area;
+        const c = w2 / area;
+        const z = a * v0.z + b * v1.z + c * v2.z;
+
+        const index = by * BUFFER_W + bx;
+        if (z < depthBuffer[index]) {
+          depthBuffer[index] = z;
+          colorBuffer[index] = color;
+        }
+      }
+    }
+  }
+
+  function drawQuadToBuffer(a, b, c, d, color) {
+    drawTriangleToBuffer(a, b, c, color);
+    drawTriangleToBuffer(a, c, d, color);
+  }
+
+  function flushBufferToCanvas() {
+    ctx.fillStyle = "#000000";
+    ctx.fillRect(0, 0, W, H);
+
+    for (let by = 0; by < BUFFER_H; by++) {
+      for (let bx = 0; bx < BUFFER_W; bx++) {
+        const color = colorBuffer[by * BUFFER_W +bx];
+        if (color === "#000000") continue;
+        ctx.fillStyle = color;
+        ctx.fillRect(bx * PIXEL_SIZE, by * PIXEL_SIZE, PIXEL_SIZE, PIXEL_SIZE);
+      }
+    }
+  }
+
+  function rasterizeBackground() {
+    drawQuadToBuffer(
+      {x: 0, y: 0, z: 1.0 },
+      {x: W, y: 0, z: 1.0 },
+      {x: W, y: horizonY, z: 1.0 },
+      {x: 0, y: horizonY, z: 1.0 },
+      "#07111a"
+    );
+
+    drawTriangleToBuffer(
+      {x: 0, y: horizonY, z: 0.95 },
+      {x: 80, y: 40, z: 0.95 },
+      {x: 150, y: horizonY, z: 0.95 },
+      "#1636b8"
+    );
+    drawTriangleToBuffer(
+      {x: 150, y: horizonY, z: 0.95 },
+      {x: 220, y: 60, z: 0.95 },
+      {x: 290, y: horizonY, z: 0.95 },
+      "#0f2a8f"
+    );
+    drawTriangleToBuffer(
+      {x: W, y: horizonY, z: 0.95 },
+      {x: 720, y: 45, z: 0.95 },
+      {x: 650, y: horizonY, z: 0.95 },
+      "#1636b8"
+    );
+     drawTriangleToBuffer(
+      {x: 650, y: horizonY, z: 0.95 },
+      {x: 590, y: 65, z: 0.95 },
+      {x: 520, y: horizonY, z: 0.95 },
+      "#0f2a8f"
+    );
+  }
+
+  function rasterizeRoad() {
+    const segments = 24;
+
+    for (let i = 0; i < segments; i++) {
+      const zFar = i / segments;
+      const zNear = (i + 1) / segments;
+
+      const yFar = perspectiveY(zFar);
+      const yNear = perspectiveY(zNear);
+      const wFar = roadHalfWidth(zFar);
+      const wNear = roadHalfWidth(zNear);
+
+      const shade = i % 2 === 0 ? "#073522" : "#0a442d";
+
+      drawQuadToBuffer(
+        { x: centerX - wFar, y: yFar, z: zFar + 0.02 },
+        { x: centerX + wFar, y: yFar, z: zFar + 0.02 },
+        { x: centerX + wNear, y: yNear, z: zNear + 0.02 },
+        { x: centerX - wNear, y: yNear, z: zNear + 0.02 },
+        shade
+      );
+    }
+  }
+
+  function cubeVertices(cx, bottomY, width, height, depthOffset, z){
+    const left = cx - width / 2;
+    const right = cx + width / 2;
+    const top = bottomY - height;
+    const backLeft = left + depthOffset;
+    const backRight = right + depthOffset;
+    const backTop = top - depthOffset;
+    const backBottom = bottomY - depthOffset;
+    const nearZ = z;
+    const farZ = Math.min(1.0, z + 0.06);
+
+    return {
+      nTL: { x: left, y: top, z: nearZ },
+      nTR: { x: right, y: top, z: nearZ },
+      nBR: { x: right, y: bottomY, z: nearZ },
+      nBL: { x: left, y: bottomY, z: nearZ },
+      fTL: { x: backLeft, y: backTop, z: farZ },
+      fTR: { x: backRight, y: backTop, z: farZ },
+      fBR: { x: backRight, y: backBottom, z: farZ },
+      fBL: { x: backLeft, y: backBottom, z: farZ }
+    };
+  }
+
+  //consulted AI for assistance
+  function rasterizeCube(v, colors) {
+    drawQuadToBuffer(v.fTL, v.fTR, v.fBR, v.fBL, colors.back);
+    drawQuadToBuffer(v.nTL, v.nTR, v.fTR, v.fTL, colors.top);
+    drawQuadToBuffer(v.nTR, v.nBR, v.fBR, v.fTR, colors.right);
+    drawQuadToBuffer(v.nBL, v.fBL, v.fTL, v.nTL, colors.left);
+    drawQuadToBuffer(v.nTL, v.nTR, v.nBR, v.nBL, colors.front);
+  }
+
+  function rasterizeObstacles() {
+    for (const obstacle of obstacles) {
+      const z = obstacle.z;
+      const x = laneX(obstacle.lane, z);
+      const y = perspectiveY(z);
+      const scale = 1 - z;
+      const width = 8 + scale * 55;
+      const height = 8 + scale * 80;
+      const offset = Math.max(3, width * 0.25);
+
+      const v = cubeVertices(x, y, width, height, offset, z);
+      rasterizeCube(v, {
+        front: "#ff4444",
+        back: "#6d1111",
+        top: "#ff7777",
+        right: "#c72d2d",
+        left: "#941f1f"
+      });
+    }
+  }
+
+    function rasterizePlayer() {
+    const cubeCenterY = H - 58;
+    const size = 26;
+    const offset = 10;
+    const bottomY = cubeCenterY + size / 2;
+    const v = cubeVertices(playerX, bottomY, size, size, offset, 0.01);
+
+    rasterizeCube(v, {
+      front: "#f4f4f4",
+      back: "#777777",
+      top: "#ffffff",
+      right: "#bdbdbd",
+      left: "#969696"
+    });
+  }
+
+  function drawTriangleMode() {
+    clearBuffers();
+    rasterizeBackground();
+    rasterizeRoad();
+    rasterizeObstacles();
+    rasterizePlayer();
+    flushBufferToCanvas();
+
+    ctx.strokeStyle = "#00ffff";
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    ctx.moveTo(0, horizonY);
+    ctx.lineTo(W, horizonY);
+    ctx.stroke();
+  }
+
+  function drawBackgroundWire() {
+    ctx.fillStyle = "#000000";
+    ctx.fillRect(0, 0, W, H);
+
+    ctx.strokeStyle = "#00ffff";
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    ctx.moveTo(0, horizonY);
+    ctx.lineTo(W, horizonY);
+    ctx.stroke();
+  }
+
+function drawWireframeRoad() {
+  ctx.strokeStyle = "#00ff88";
+  ctx.lineWidth = 1;
+
+  const linePositions = [-1.5, -0.5, 0.5, 1.5];
+
+  for (const lane of linePositions) {
+    ctx.beginPath();
+    ctx.moveTo(centerX + lane * 10, horizonY);
+    ctx.lineTo(centerX + lane * 225, H);
+    ctx.stroke();
+  }
+
+  const spacing = 0.08;
+
+  for (let i = 0; i < 20; i++) {
+    let z = (i * spacing + distance) % 1;
+
+    const y = perspectiveY(z);
+    const halfWidth = roadHalfWidth(z);
+
+    ctx.beginPath();
+    ctx.moveTo(centerX - halfWidth, y);
+    ctx.lineTo(centerX + halfWidth, y);
+    ctx.stroke();
+  }
+}
+
+function drawMountains() {
+  ctx.strokeStyle = "#0044ff";
+  ctx.lineWidth = 1;
+
+  ctx.beginPath();
+  ctx.moveTo(0, horizonY);
+  ctx.lineTo(80, 40);
+  ctx.lineTo(150, horizonY);
+  ctx.lineTo(220, 60);
+  ctx.lineTo(290, horizonY);
+  ctx.stroke();
+
+  ctx.beginPath();
+  ctx.moveTo(W, horizonY);
+  ctx.lineTo(720, 45);
+  ctx.lineTo(650, horizonY);
+  ctx.lineTo(590, 65);
+  ctx.lineTo(520, horizonY);
+  ctx.stroke();
+}
+
+function drawCube() {
+  const cubeCenterY = H - 58;
+
+  const size = 26;
+  const offset = 10;
+
+  const left = playerX - size / 2;
+  const right = playerX + size /2;
+  const top = cubeCenterY - size / 2;
+  const bottom = cubeCenterY + size / 2;
+
+  ctx.strokeStyle = "#ffffff";
+  ctx.lineWidth = 3;
+
+  // Forward most square
+  ctx.strokeRect(left, top, size, size);
+
+  // Rear square
+  ctx.strokeRect(left + offset, top - offset, size, size);
+
+  // Join corners to squares
+  ctx.beginPath();
+
+  ctx.moveTo(left, top);
+  ctx.lineTo(left + offset, top - offset);
+  
+  ctx.moveTo(right, top);
+  ctx.lineTo( right+ offset, top - offset);
+
+  ctx.moveTo(left, bottom);
+  ctx.lineTo(left + offset, bottom - offset);
+
+  ctx.moveTo(right, bottom);
+  ctx.lineTo(right + offset, bottom - offset);
+
+  ctx. stroke();
+}
+
+function drawObstacle(obstacle) {
+  const z = obstacle.z;
+  const x = laneX(obstacle.lane, z);
+  const y = perspectiveY(z);
+  const scale = 1 - z;
+
+  const width = 8 + scale * 55;
+  const height = 8 + scale * 80;
+
+  ctx.strokeStyle = "#ff4444";
+  ctx.lineWidth = 1 + scale * 3;
+
+  const left = x - width / 2;
+  const right = x + width / 2;
+  const top = y - height; 
+  const bottom = y;
+  const offset = width * 0.25;
+
+  ctx.strokeRect(left, top, width, height);
+
+  ctx.strokeRect(left + offset, top - offset, width, height);
+
+  ctx.beginPath();
+
+  ctx.moveTo(left, top);
+  ctx.lineTo(left +offset, top - offset);
+
+  ctx.moveTo(right, top);
+  ctx.lineTo(right + offset, top - offset);
+
+  ctx.moveTo(left, bottom);
+  ctx.lineTo(left + offset, bottom - offset);
+
+  ctx.moveTo(right, bottom);
+  ctx.lineTo(right + offset, bottom - offset);
+
+  ctx.stroke();
+}
+
+function drawObstacles() {
+  for (let obstacle of obstacles) {
+    drawObstacle(obstacle);
+  }
+}
+
+// from Frank's lab
+function checkCollisions() { 
+  for (let obstacle of obstacles) {
+    if (obstacle.z < 0.07 && obstacle.lane === playerLane){
+      gameState = "Game Over!";
+    }
+  }
+}
+
+function resetGame() {
+  score = 0;
+  speed = 0.008; //just make it fair
+  distance = 0;
+  playerLane = 0;
+  playerX = centerX;
+  playerTargetX = centerX;
+
+  obstacles = [
+    { lane: -1, z: 0.30 },
+    { lane: 1, z: 0.60 },
+    { lane: 0, z: 0.90 }
+  ];
+
+  gameState = "playing";
+}
+
+function update() {
+  if (gameState !== "playing") {
+    return;
+  }
+  
+  distance += speed;
+
+  if (distance >=1) {
+    distance -= 1;
+  }
+
+  playerTargetX = laneX(playerLane,0);
+  playerX += (playerTargetX - playerX) *0.18;
+
+  for (let obstacle of obstacles) {
+    obstacle.z -= speed;
+
+    if (obstacle.z <= 0) {
+      obstacle.z = 1 + Math.random() * 0.3;
+
+      const lanes = [-1, 0, 1];
+      obstacle.lane = lanes[Math.floor(Math.random() * lanes.length)];
+
+      score++;
+      speed += 0.00015;
+    }
+  }
+
+  checkCollisions();
+}
+
+function drawUI() {
+  ctx.fillStyle = "#ffffff";
+  ctx. font = "16px monospace";
+  ctx.textAlign = "left";
+
+  ctx.fillText("Canyon Runner", 20, 28);
+  ctx.fillText("Score: " + score, 20, 50);
+  ctx.fillText("Speed: " + speed.toFixed(3), 20, 72);
+
+  if (gameState === "Game Over!") {
+    ctx.fillStyle = "rgba(0, 0, 0, 0.70)";
+    ctx.fillRect(0, 0, W, H);
+
+    ctx.textAlign = "center";
+
+    ctx.fillStyle = "#ff4444";
+    ctx.font = "40px monospace";
+    ctx.fillText("OOPSIE!", W/2, H / 2 - 20);
+
+    ctx.fillStyle = "#ffffff";
+    ctx.font = "18px monospace";
+    ctx.fillText("Hit the big bar to do it again!", W/ 2, H / 2 + 25);
+
+    ctx.textAlign = "left";
+  }
+}
+
+function draw() {
+  if (renderMode === "triangles"){
+    drawTriangleMode();
+  } else {
+  drawBackgroundWire();
+  drawMountains();
+  drawWireframeRoad();
+  drawObstacles();
+  drawCube();
+  }
+  drawUI();
+}
+
+function toggleRenderMode() {
+  renderMode = renderMode === "triangles" ? "wireframe" : "triangles";
+  modeButton.textContent = renderMode === "triangles"
+  ? "Switch to Wirframe Mode (T)"
+  : "Switch to Triangle Mode (T)";
+}
+
+modeButton.addEventListener("click", toggleRenderMode);
+
+window.addEventListener("keydown", (event) => {
+  if (event.code === "ArrowLeft") {
+    playerLane -- ;
+    if (playerLane < -1) {
+      playerLane = -1;
+    }
+    event.preventDefault();
+  }
+
+  else if (event.code === "ArrowRight") {
+    playerLane++;
+    if(playerLane > 1) {
+      playerLane = 1;
+    }
+    event.preventDefault();
+  }
+
+  else if (event.code === "Space") {
+    if (gameState === "Game Over!") {
+      resetGame();
+    }
+    event.preventDefault();
+  }
+
+  else if (event.code === "KeyT") {
+    toggleRenderMode();
+    event.preventDefault();
+  }
+
+  window.parent.postMessage(
+    {
+      type: "KEY_SWITCH",
+      key: event.key
+    },
+    "*"
+  );
+});
+
+function loop(){
+  update();
+  draw();
+  requestAnimationFrame(loop);
+}
+
+resetGame();
+loop();
+</script>
+</body>
+</html>

@@ -1,0 +1,186 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Level 2 - BRAMBIAS</title>
+  <style>
+    body {
+      margin: 0;
+      overflow: hidden;
+      background: #050510;
+      color: white;
+      font-family: Arial, sans-serif;
+    }
+
+    canvas {
+      display: block;
+    }
+
+    #info {
+      position: fixed;
+      top: 12px;
+      left: 12px;
+      padding: 12px 14px;
+      background: rgba(0, 0, 0, 0.6);
+      border-radius: 8px;
+      font-size: 14px;
+      line-height: 1.4;
+    }
+  </style>
+</head>
+<body>
+  <canvas id="canvas"></canvas>
+
+  <div id="info">
+    <b>Pixel grid test</b><br>
+    <b>Pixel grid test</b><br>
+    <b>Pixel grid test</b><br>
+    <b>Reset with R key</b><br>
+  </div>
+
+<script>
+
+  //we add shapes (like lines) to this canvas
+  const canvas = document.getElementById("canvas");
+  const ctx = canvas.getContext("2d");
+
+
+  const rows = 200;
+  const cols = 320;
+  const pixelGrid = Array.from({ length: cols }, () => Array(rows).fill("#050510"));
+
+  let seePixelOutline = true; 
+
+
+   //light up a couple of pixels 
+  setPixelColor(100,100,"#FFFFFF")
+  setPixelColor(100,101,"#FFFFFF")
+  setPixelColor(101,100,"#FFFFFF")
+  setPixelColor(101,101,"#FFFFFF")
+  setPixelColor(102,101,"#FFFFFF")
+
+
+  makePixelatedLine(50, 50, 90, 50, "#00FF00" ); 
+
+
+
+  function draw(){
+
+    //here we set up and clear the canvas, every draw frame
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+    ctx.fillStyle = "#050510";
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+    ctx.lineWidth = 1;
+    ctx.strokeStyle = "#444444";
+
+
+    for(v=0; v< 200; v++){
+      for(u=0; u<320; u++){
+
+        //if you want to see what is going on
+        console.log(u);
+        console.log(v);
+        console.log(pixelGrid[u][v]);
+        console.log("----")
+
+        ctx.fillStyle = pixelGrid[u][v];
+        ctx.fillRect(u*5, v*5, 5, 5);
+
+        if( seePixelOutline ){
+          ctx.strokeRect(u*5, v*5, 5, 5);
+        }
+
+      }
+    }
+
+
+  }
+
+  function setPixelColor(u,v,color){
+    pixelGrid[u][v] = color; 
+  }
+
+  function makePixelatedLine(u1, v1, u2, v2, color){
+
+    
+    //******** TO DO
+    //use the algorithm in the slides to incrementally fill
+    // in pixels going from u1,v1 to u2,v2
+    // you can use 'setPixelColor'
+    // note, you may need to handle 'cases'- ex.u1>u2 vs u2>u2 
+
+    let du = u2 - u1;
+    let dv = v2 - v1;
+
+    // Case handeling for wider than taller
+    if (Math.abs(du) >= Math.abs(dv)) {
+
+      //From left to right
+      if (u1 > u2) {
+        let temp = u1;
+        u1 = u2;
+        u2 = temp;
+
+        temp = v1;
+        v1 = v2;
+        v2 = temp;
+      }
+    
+    let slope = (v2 - v1) / (u2 - u1);
+    let v = v1;
+
+      for (let u = u1; u <= u2; u++) {
+        setPixelColor(u, Math.round(v), color); // to get first endpoint drawn
+        v += slope;
+      }
+    }
+
+    // Case handeling for when taller than wider
+    else {
+      // From top to bottom
+      if (v1 > v2) {
+        let temp = u1;
+        u1 = u2;
+        u2 = temp;
+
+        temp = v1;
+        v1 = v2;
+        v2 = temp;
+      }
+    
+      let slope = (u2 - u1) / (v2 - v1);
+      let u = u1;
+
+        for (let v = v1; v <= v2; v++) {
+          setPixelColor(Math.round(u), v, color); //v is loop variable
+          u += slope; 
+        }
+    }
+
+  }
+
+  
+  function resizeCanvas() {
+    canvas.width = window.innerWidth;
+    canvas.height = window.innerHeight;
+    draw();
+  }
+
+
+
+  window.addEventListener("resize", resizeCanvas);
+  resizeCanvas();
+
+
+
+</script>
+<script>
+  window.addEventListener('keydown', (e) => {
+    // Forwards the keystroke to the parent window
+    window.parent.postMessage({ type: 'KEY_SWITCH', key: e.key }, '*');
+  });
+</script>
+</body>
+</html>
